@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package>
+    <name>rosdigit</name>
+    <description>
+        7-segment display digit recogniser as a ROS package
+    </description>
+    <version>1.0.0</version>
+    <maintainer email="el398@cam.ac.uk">el398</maintainer>
+    <license>GPLv2</license>
+    <url>http://www.cuaf.co.uk/</url>
+
+
+    <buildtool_depend>catkin</buildtool_depend>
+    <build_depend>roscpp</build_depend>
+    <build_depend>cv_bridge</build_depend>
+
+    <run_depend>roscpp</run_depend>
+    <run_depend>cv_bridge</run_depend>
+
+</package>
+
+

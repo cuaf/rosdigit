@@ -1,0 +1,299 @@
+#include <ros/ros.h>
+
+#include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
+#include <sensor_msgs/image_encodings.h>
+
+#include <cv_bridge/cv_bridge.h>
+
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/calib3d/calib3d.hpp"
+
+#include <cstdio>
+#include <vector>
+#include <algorithm>
+
+using namespace std;
+
+cv::Mat thDigit[10];
+cv::Point2f center;
+
+ros::Subscriber subImage;
+
+cv::Mat loadDigit(int digit)
+{
+    char buff[50];
+    sprintf(buff, "../display/%d.PNG", digit);
+    cv::Mat image = cv::imread(buff, CV_LOAD_IMAGE_GRAYSCALE);
+    return image;
+}
+
+// Computes intersection of segments ONLY IF SEGMENTS INTERSECT/TOUCH 
+// within tolerance (threshold, def 10px)
+cv::Point2f computeIntersect(cv::Vec4i a, cv::Vec4i b)  
+{
+    int th = 3; //Threshold in pixels
+    int x1 = a[0], y1 = a[1], x2 = a[2], y2 = a[3];  
+    int x3 = b[0], y3 = b[1], x4 = b[2], y4 = b[3];  
+    if (float d = ((float)(x1-x2) * (y3-y4)) - ((y1-y2) * (x3-x4)))  
+    {  
+        cv::Point2f pt;  
+        pt.x = ((x1*y2 - y1*x2) * (x3-x4) - (x1-x2) * (x3*y4 - y3*x4)) / d;  
+        pt.y = ((x1*y2 - y1*x2) * (y3-y4) - (y1-y2) * (x3*y4 - y3*x4)) / d;  
+        if(pt.x < min(x1,x2)-th || pt.x > max(x1,x2) + th || pt.y < min(y1,y2)-th || pt.y > max(y1,y2)+th){  
+            return cv::Point2f(-1,-1);  
+        }  
+        if(pt.x < min(x3,x4)-th || pt.x > max(x3,x4)+th || pt.y < min(y3,y4)-th || pt.y > max(y3,y4)+th){  
+            return cv::Point2f(-1,-1);  
+        }  
+        return pt;  
+    }  
+    return cv::Point2f(-1, -1);  
+}  
+
+bool comparator(cv::Point2f a, cv::Point2f b)
+{  
+    bool ag = a.x < 0, bg = b.x < 0;
+    if(ag ^ bg) {
+        return a.x < b.x; 
+    }
+    float distA = a.x*a.x + a.y*a.y;
+    float distB = b.x*b.x + b.y*b.y;
+    if(ag && bg) return distA > distB;
+    return distA < distB;
+}
+
+
+void sortCorners(std::vector<cv::Point2f>& corners)  
+{  
+    vector<cv::Point2f> top, bot;  
+    for (int i = 0; i < corners.size(); i++)  
+    {  
+        if (corners[i].y < center.y)  
+            top.push_back(corners[i]-center);  
+        else  
+            bot.push_back(corners[i]-center);  
+    }  
+
+    if(top.size() < 2 || bot.size() < 2) {
+        corners.clear();
+        return;
+    }
+
+    sort(top.begin(),top.end(),comparator);  
+    sort(bot.begin(),bot.end(),comparator); 
+
+    cv::Point2f tl = top[0] + center;
+    cv::Point2f tr = top[top.size()-1] + center;
+    cv::Point2f bl = bot[0] + center;
+    cv::Point2f br = bot[bot.size()-1] + center;  
+
+    corners.clear();  
+    corners.push_back(tl);  
+    corners.push_back(tr);  
+    corners.push_back(br);  
+    corners.push_back(bl);  
+}  
+
+void init()
+{
+    for(int dig = 0; dig < 10; ++dig) {
+        thDigit[dig] = loadDigit(dig);
+        cv::threshold(thDigit[dig], thDigit[dig], 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+    }
+}
+
+int process(cv::Mat grey)
+{
+    int cannyLow = 210, cannyHigh = 3*cannyLow, cannyKernel = 1;
+
+    cv::Mat image;
+    cv::blur(grey, grey, cv::Size(4,4));
+    cv::Canny(grey, image, cannyLow, cannyHigh, cannyKernel*2+3);
+    cv::dilate(image, image, cv::Mat(), cv::Point(-1,-1), 2);
+
+    vector<cv::Vec4i> lines;
+    cv::HoughLinesP(image, lines, 1, CV_PI/180, 70, 30, 10);
+
+    cv::Mat dst;
+    cv::cvtColor(image, dst, CV_GRAY2BGR);
+
+    cv::imshow("Original", grey);
+
+    // Draw lines
+    for (int i = 0; i < lines.size(); i++)
+    {
+        cv::Vec4i v = lines[i];
+        cv::line(dst, cv::Point(v[0], v[1]), cv::Point(v[2], v[3]), CV_RGB(0,255,0));
+    }
+
+    // Maintain a disjoint set of lines
+    // i.e. group lines into polygons if they touch and keep
+    // vertices (points of intersections)
+    // May go horribly wrong in degenerate cases (wrong grouping)
+    // probably better to consider every rectangle later on.
+    int poly[lines.size()];  
+    for(int i=0; i < lines.size(); i++)
+        poly[i] = -1;
+
+    int curPoly = 0;  
+    vector<vector<cv::Point2f> > corners;  
+    cv::Rect imgRect(cv::Point(0, 0), image.size());
+
+    for (int i = 0; i < lines.size(); i++)  
+    {  
+        for (int j = i+1; j < lines.size(); j++)  
+        {  
+            cv::Point2f pt = computeIntersect(lines[i], lines[j]);  
+            if (imgRect.contains(pt))
+            {   
+                if(poly[i] == -1 && poly[j] == -1){  // Set union
+                    vector<cv::Point2f> v;  
+                    v.push_back(pt);  
+                    corners.push_back(v);       
+                    poly[i] = curPoly;  
+                    poly[j] = curPoly;  
+                    curPoly++;  
+                }  
+                else if(poly[i] == -1 && poly[j] != -1) // Attach i to j
+                {  
+                    corners[poly[j]].push_back(pt);  
+                    poly[i] = poly[j];   
+                }  
+                else if(poly[i] != -1 && poly[j] == -1) // Attach j yo i
+                {  
+                    corners[poly[i]].push_back(pt);  
+                    poly[j] = poly[i];  
+                }  
+                else //if(poly[i] != -1 && poly[j] != -1) // Set union
+                {  
+                    if(poly[i] == poly[j]) //Same set
+                    {  
+                        corners[poly[i]].push_back(pt);  
+                    }
+                    else
+                    {
+                        for(int k=0; k<corners[poly[j]].size(); k++){  
+                            corners[poly[i]].push_back(corners[poly[j]][k]);  
+                        }  
+                       
+                        corners[poly[j]].clear();  
+                        poly[j] = poly[i];
+                    } 
+                }  
+            }  
+        }  
+    }  
+
+    int finalAns = -1;
+    
+    for(int i = 0; i < corners.size(); ++i)
+    {
+        if(corners[i].size() < 4) continue;
+
+        // Try to make 4-vertex polygon by taking extremes of each set
+        // i.e. top-most, left-most, etc.
+        // Probably better to K-Means cluster points into 4 groups
+        center = cv::Point(image.size().width / 2, image.size().height / 2); //Shame.
+        cv::circle(dst, center, 2, 
+                CV_RGB(255-i*255/corners.size(),i*255/corners.size(),0));
+
+        sortCorners(corners[i]);
+
+        // Drawing pretty circles for each object detected
+        for(int j = 0; j < corners[i].size(); ++j) 
+        {
+            cv::circle(dst, corners[i][j], 2, 
+                CV_RGB(255-i*255/corners.size(),i*255/corners.size(),255));
+        }
+
+        if(corners[i].size() != 4) continue;
+
+        cv::Rect r = cv::boundingRect(corners[i]);
+        float hwRatio = (float)r.height / r.width;
+        if(hwRatio < 1 || hwRatio > 4) continue;
+
+        // Warping polygon
+        cv::Mat quad = cv::Mat::zeros(119, 63, CV_8UC3); 
+        cv::Rect interest(1, 1, 61, 117);
+
+        
+        std::vector<cv::Point2f> quad_pts;  
+        quad_pts.push_back(cv::Point2f(0, 0));  
+        quad_pts.push_back(cv::Point2f(quad.cols, 0));  
+        quad_pts.push_back(cv::Point2f(quad.cols, quad.rows));  
+        quad_pts.push_back(cv::Point2f(0, quad.rows));  
+
+        cv::Mat transmtx = cv::getPerspectiveTransform(corners[i], quad_pts);  
+        cv::warpPerspective(grey, quad, transmtx, quad.size());  
+
+        cv::Mat final = quad(interest);
+
+        imshow("Warped", final);
+        double thr = cv::threshold(final, transmtx, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
+        cv::threshold(final, final, thr, 255, CV_THRESH_BINARY);
+        imshow("Warped (binarised)", final);
+
+        // Match
+        double min = 1e40;
+        int digit = -1;
+        for(int dig = 0; dig < 10; ++dig) {
+            cv::Mat match;
+            cv::matchTemplate(final, thDigit[dig], match, CV_TM_SQDIFF_NORMED);
+            //printf("Digit %d gave %.25f\n", dig, match.at<double>(0, 0));
+            if(match.at<double>(0, 0) < min) { // I don't know why it works, it always outputs 0
+                min = match.at<double>(0, 0);
+                digit = dig;
+            }
+        }
+        finalAns = max(digit, finalAns);
+    }
+    
+    cv::imshow("Output", dst);
+    return finalAns;
+}
+
+int frameNo = 0, final = 0, skipper = 0;
+
+void imageCallback(const sensor_msgs::ImageConstPtr& msg)
+{    
+    ++skipper;
+    //if(skipper < 2) return;
+    skipper = 0;
+    //Convert to OpenCv image
+    cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
+    cv::Mat image = cv_ptr->image;
+    
+    //Create a seperate image for dipslay purposes.
+    cv::Mat displayImage;
+    image.copyTo(displayImage);
+    cv::cvtColor(displayImage, displayImage, CV_BGR2GRAY);
+    final = max(process(displayImage), final);
+    ++frameNo;
+    if(frameNo == 24) {
+        if(final == 0) printf("Nothing.\n");
+        else printf("Recognised %d\n", final);
+        final = 0;
+        frameNo = 0;
+    }
+}
+
+int main(int argc, char **argv)
+{   
+    cv::namedWindow("Output", cv::WINDOW_NORMAL);
+    init();
+
+    ros::init(argc, argv, "cross_detector");
+    ros::NodeHandle n;
+
+    subImage = n.subscribe("ardrone/image_raw", 1, imageCallback);
+
+    while(ros::ok()) {
+        cv::waitKey(1); //Allows GUI events to be proccessed
+        ros::spinOnce();
+    }
+
+    ros::spin();
+}
