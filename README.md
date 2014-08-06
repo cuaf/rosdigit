@@ -12,6 +12,6 @@ Requirements
 ---------------
 - `ros-hydro-desktop-full`
 - `ros-hydro-vision-opencv`
-- [ardrone_autonom
+- [ardrone_autonomy]
 
 [ardrone_autonomy]:https://github.com/AutonomyLab/ardrone_autonomy
