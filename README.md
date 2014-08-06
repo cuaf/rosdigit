@@ -2,9 +2,16 @@ rosdigit
 ========
 
 7-segment display single digit recogniser integrated with ROS stack
-<<<<<<< HEAD
 
-To run make sure you have ardrone_autonomy installed and running
+To run make sure you have ardrone_autonomy installed.
+
+Compile and run:
 `catkin_make install && rosrun rosdigit rosdigit`
-=======
->>>>>>> b41ec703ef762553656c0528804c37c0c6864da3
+
+Requirements
+---------------
+- `ros-hydro-desktop-full`
+- `ros-hydro-vision-opencv`
+- [ardrone_autonom
+
+[ardrone_autonomy]:https://github.com/AutonomyLab/ardrone_autonomy

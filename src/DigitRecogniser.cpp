@@ -23,8 +23,8 @@ int DigitRecogniser::recognise(cv::Mat image)
 
     // Extract low and high hue values - they correspond to shades of red
     // Adjust saturation and value to allow darker shades and whiter tints appear
-    cv::inRange(hsv, cv::Scalar(0, 50, 100), cv::Scalar(17, 255, 255), bin[0]);
-    cv::inRange(hsv, cv::Scalar(175, 50, 100), cv::Scalar(180, 255, 255), bin[1]);
+    cv::inRange(hsv, cv::Scalar(0, 90, 100), cv::Scalar(17, 255, 255), bin[0]);
+    cv::inRange(hsv, cv::Scalar(175, 90, 100), cv::Scalar(180, 255, 255), bin[1]);
     cv::bitwise_or(bin[0], bin[1], finbin);
 
     // Trick - blur & dilate & threshold binary image again
@@ -34,7 +34,7 @@ int DigitRecogniser::recognise(cv::Mat image)
     cv::blur(finbin, finbin, cv::Size(4,4));
     cv::dilate(finbin, finbin, cv::Mat(), cv::Point(-1, -1), 5); // Dilate 5 times
     cv::threshold(finbin, finbin, 0, 255, CV_THRESH_BINARY | CV_THRESH_OTSU);
-
+    
     // Now we can extract digit contours - should be one big contour
     // (dilate more if not)
     std::vector<std::vector<cv::Point> > contours;

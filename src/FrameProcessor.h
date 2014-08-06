@@ -18,15 +18,18 @@
 class FrameProcessor
 {
 public:
-	FrameProcessor(int argc, char **argv, DigitRecogniser *rec);
+	FrameProcessor(int argc, char **argv, DigitRecogniser *rec, int skipFrames = 3, int averageOver = 6);
 	void spin();
 
 private:
 	void imageCallback(const sensor_msgs::ImageConstPtr& msg);
+	void outputResult();
 
 	ros::Subscriber subImage;
 	DigitRecogniser *recogniser;
-	int frameNo, final, skipper;
+	int skipFrames, averageOver;
+	int frameCounter, prevResult;
+	int results[10];
 };
 
 #endif
